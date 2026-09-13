@@ -33,6 +33,23 @@ variable "availability_zone_count" {
   }
 }
 
+variable "nat_gateway_mode" {
+  description = "NAT gateway topology: none, single, or per_az."
+  type        = string
+  default     = "none"
+
+  validation {
+    condition     = contains(["none", "single", "per_az"], var.nat_gateway_mode)
+    error_message = "nat_gateway_mode must be one of: none, single, per_az."
+  }
+}
+
+variable "enable_vpc_endpoints" {
+  description = "Create private endpoints for AWS services used by ECS tasks."
+  type        = bool
+  default     = true
+}
+
 variable "app_port" {
   description = "Port used by the containerized backend service."
   type        = number
@@ -51,17 +68,27 @@ variable "db_username" {
   default     = "cloud_platform"
 }
 
-variable "db_password" {
-  description = "Initial PostgreSQL administrator password. Pass this through a secret manager or tfvars excluded from Git."
-  type        = string
-  sensitive   = true
-  nullable    = false
-}
-
 variable "db_instance_class" {
   description = "RDS instance class for the environment."
   type        = string
   default     = "db.t4g.micro"
+}
+
+variable "db_backup_retention_period" {
+  description = "Number of days to retain automated RDS backups."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.db_backup_retention_period >= 0 && var.db_backup_retention_period <= 35
+    error_message = "db_backup_retention_period must be between 0 and 35 days."
+  }
+}
+
+variable "db_multi_az" {
+  description = "Deploy a standby RDS instance in another availability zone."
+  type        = bool
+  default     = false
 }
 
 variable "db_skip_final_snapshot" {
@@ -74,6 +101,12 @@ variable "db_deletion_protection" {
   description = "Prevent accidental deletion of the RDS instance."
   type        = bool
   default     = false
+}
+
+variable "log_retention_in_days" {
+  description = "CloudWatch application log retention period."
+  type        = number
+  default     = 30
 }
 
 variable "tags" {

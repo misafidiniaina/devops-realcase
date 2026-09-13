@@ -5,7 +5,3 @@ provider "aws" {
     tags = local.tags
   }
 }
-
-data "aws_availability_zones" "available" {
-  state = "available"
-}

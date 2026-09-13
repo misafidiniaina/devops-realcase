@@ -1,11 +1,7 @@
-locals {
-  container_repositories = toset(["backend", "frontend"])
-}
+resource "aws_ecr_repository" "this" {
+  for_each = var.repository_names
 
-resource "aws_ecr_repository" "application" {
-  for_each = local.container_repositories
-
-  name                 = "${local.name}/${each.key}"
+  name                 = "${var.name}/${each.key}"
   image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
@@ -16,14 +12,14 @@ resource "aws_ecr_repository" "application" {
     encryption_type = "AES256"
   }
 
-  tags = {
-    Name      = "${local.name}/${each.key}"
+  tags = merge(var.tags, {
     Component = each.key
-  }
+    Name      = "${var.name}/${each.key}"
+  })
 }
 
-resource "aws_ecr_lifecycle_policy" "application" {
-  for_each = aws_ecr_repository.application
+resource "aws_ecr_lifecycle_policy" "this" {
+  for_each = aws_ecr_repository.this
 
   repository = each.value.name
 

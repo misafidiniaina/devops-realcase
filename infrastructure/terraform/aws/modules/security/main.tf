@@ -1,7 +1,7 @@
 resource "aws_security_group" "load_balancer" {
-  name        = "${local.name}-load-balancer"
+  name        = "${var.name}-load-balancer"
   description = "Public HTTP and HTTPS access for the application load balancer."
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = var.vpc_id
 
   ingress {
     description = "HTTP"
@@ -27,15 +27,15 @@ resource "aws_security_group" "load_balancer" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${local.name}-load-balancer"
-  }
+  tags = merge(var.tags, {
+    Name = "${var.name}-load-balancer"
+  })
 }
 
 resource "aws_security_group" "application" {
-  name        = "${local.name}-application"
+  name        = "${var.name}-application"
   description = "Private access to the application container port."
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = var.vpc_id
 
   ingress {
     description     = "Application traffic from the load balancer"
@@ -53,15 +53,15 @@ resource "aws_security_group" "application" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${local.name}-application"
-  }
+  tags = merge(var.tags, {
+    Name = "${var.name}-application"
+  })
 }
 
 resource "aws_security_group" "database" {
-  name        = "${local.name}-database"
+  name        = "${var.name}-database"
   description = "PostgreSQL access from the application security group only."
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = var.vpc_id
 
   ingress {
     description     = "PostgreSQL from the application"
@@ -79,7 +79,7 @@ resource "aws_security_group" "database" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${local.name}-database"
-  }
+  tags = merge(var.tags, {
+    Name = "${var.name}-database"
+  })
 }
