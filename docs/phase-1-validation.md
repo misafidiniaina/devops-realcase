@@ -28,7 +28,7 @@ Expected tables: `schema_migrations`, `servers`.
 
 ## Frontend
 
-Open `http://localhost:5173`, create a server, refresh, then delete it.
+Open `http://localhost:5173`, create a server, edit it, refresh the list, then delete it.
 
 ## Persistence
 
