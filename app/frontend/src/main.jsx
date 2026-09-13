@@ -111,8 +111,10 @@ function App() {
             <option>gcp</option>
             <option>on-premise</option>
           </select>
-          <button type="submit">{editingId ? 'Save changes' : 'Create server'}</button>
-          {editingId && <button type="button" className="secondary" onClick={cancelEdit}>Cancel</button>}
+          <div className="form-actions">
+            <button type="submit">{editingId ? 'Save changes' : 'Create server'}</button>
+            {editingId && <button type="button" className="secondary" onClick={cancelEdit}>Cancel</button>}
+          </div>
         </form>
       </section>
 
