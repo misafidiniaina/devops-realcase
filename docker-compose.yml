@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:18
+    container_name: cloud-platform-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cloud_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-cloud_platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cloud_platform_dev}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./app/backend
+    container_name: cloud-platform-backend
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cloud_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-cloud_platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cloud_platform_dev}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      APP_PORT: ${APP_PORT:-8080}
+      APP_ENV: ${APP_ENV:-development}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build: ./app/frontend
+    container_name: cloud-platform-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
