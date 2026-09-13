@@ -2,172 +2,186 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/misafidiniaina/cloud-platform-lab/internal/config"
+	"github.com/misafidiniaina/cloud-platform-lab/internal/health"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"sync/atomic"
 )
 
-type Task struct {
-	ID          int64     `json:"id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+type Server struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Hostname    string `json:"hostname"`
+	IPAddress   string `json:"ip_address"`
+	Environment string `json:"environment"`
+	Provider    string `json:"provider"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
-type input struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Status      string `json:"status"`
+type Router struct {
+	db       *pgxpool.Pool
+	cfg      config.Config
+	requests atomic.Uint64
 }
-type API struct{ db *pgxpool.Pool }
 
-func New(db *pgxpool.Pool) *API { return &API{db: db} }
-func (a *API) Register(m *http.ServeMux) {
-	m.HandleFunc("/health", a.health)
-	m.HandleFunc("/metrics", a.metrics)
-	m.HandleFunc("/api/tasks", a.tasks)
-	m.HandleFunc("/api/tasks/", a.task)
+func NewRouter(db *pgxpool.Pool, cfg config.Config) http.Handler {
+	r := &Router{db: db, cfg: cfg}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", health.Handler)
+	mux.HandleFunc("/metrics", r.metrics)
+	mux.HandleFunc("/api/v1/servers", r.servers)
+	mux.HandleFunc("/api/v1/servers/", r.serverByID)
+	return r.middleware(mux)
 }
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+func (r *Router) middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.requests.Add(1)
+		w.Header().Set("Access-Control-Allow-Origin", r.cfg.CORSOrigin)
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+		if req.Method == http.MethodOptions {
+			w.WriteHeader(204)
+			return
+		}
+		next.ServeHTTP(w, req)
+	})
 }
-func (a *API) health(w http.ResponseWriter, _ *http.Request) {
-	status := "ok"
-	if a.db != nil && a.db.Ping(w.Context()) != nil {
-		status = "degraded"
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": status})
-}
-func (a *API) metrics(w http.ResponseWriter, _ *http.Request) {
+func (r *Router) metrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	_, _ = w.Write([]byte("# HELP app_up Application availability\n# TYPE app_up gauge\napp_up 1\n"))
+	_, _ = w.Write([]byte("# HELP cloud_platform_http_requests_total Total HTTP requests received.\n# TYPE cloud_platform_http_requests_total counter\ncloud_platform_http_requests_total " + strconv.FormatUint(r.requests.Load(), 10) + "\n"))
 }
-func (a *API) tasks(w http.ResponseWriter, r *http.Request) {
-	if a.db == nil {
-		writeJSON(w, 503, map[string]string{"error": "database is not configured"})
-		return
-	}
-	switch r.Method {
+func (r *Router) servers(w http.ResponseWriter, req *http.Request) {
+	switch req.Method {
 	case http.MethodGet:
-		a.list(w, r)
+		r.listServers(w, req)
 	case http.MethodPost:
-		a.create(w, r)
+		r.createServer(w, req)
 	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeError(w, 405, "method not allowed")
 	}
 }
-func (a *API) task(w http.ResponseWriter, r *http.Request) {
-	if a.db == nil {
-		writeJSON(w, 503, map[string]string{"error": "database is not configured"})
+func (r *Router) serverByID(w http.ResponseWriter, req *http.Request) {
+	id, err := strconv.ParseInt(strings.TrimPrefix(req.URL.Path, "/api/v1/servers/"), 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, 400, "invalid server id")
 		return
 	}
-	id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/api/tasks/"), 10, 64)
-	if err != nil {
-		writeJSON(w, 400, map[string]string{"error": "invalid task id"})
-		return
-	}
-	switch r.Method {
+	switch req.Method {
 	case http.MethodGet:
-		a.get(w, r, id)
+		r.getServer(w, req, id)
 	case http.MethodPut:
-		a.update(w, r, id)
+		r.updateServer(w, req, id)
 	case http.MethodDelete:
-		a.delete(w, r, id)
+		r.deleteServer(w, req, id)
 	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeError(w, 405, "method not allowed")
 	}
 }
-func decode(r *http.Request) (input, error) {
-	var in input
-	err := json.NewDecoder(r.Body).Decode(&in)
-	if err == nil && strings.TrimSpace(in.Title) == "" {
-		err = fmt.Errorf("title is required")
-	}
-	if in.Status == "" {
-		in.Status = "todo"
-	}
-	return in, err
-}
-func (a *API) list(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.db.Query(r.Context(), `SELECT id,title,description,status,created_at,updated_at FROM tasks ORDER BY id DESC`)
+func (r *Router) listServers(w http.ResponseWriter, req *http.Request) {
+	rows, err := r.db.Query(req.Context(), `SELECT id,name,hostname,ip_address::text,environment,provider,created_at::text,updated_at::text FROM servers ORDER BY id DESC`)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeError(w, 500, "failed to list servers")
 		return
 	}
 	defer rows.Close()
-	result := []Task{}
+	out := make([]Server, 0)
 	for rows.Next() {
-		var t Task
-		if err = rows.Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.CreatedAt, &t.UpdatedAt); err != nil {
-			writeJSON(w, 500, map[string]string{"error": err.Error()})
+		var s Server
+		if err := rows.Scan(&s.ID, &s.Name, &s.Hostname, &s.IPAddress, &s.Environment, &s.Provider, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			writeError(w, 500, "failed to read servers")
 			return
 		}
-		result = append(result, t)
+		out = append(out, s)
 	}
-	writeJSON(w, 200, result)
+	if err := rows.Err(); err != nil {
+		writeError(w, 500, "failed to read servers")
+		return
+	}
+	writeJSON(w, 200, out)
 }
-func (a *API) get(w http.ResponseWriter, r *http.Request, id int64) {
-	var t Task
-	err := a.db.QueryRow(r.Context(), `SELECT id,title,description,status,created_at,updated_at FROM tasks WHERE id=$1`, id).Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.CreatedAt, &t.UpdatedAt)
-	if err == pgx.ErrNoRows {
-		writeJSON(w, 404, map[string]string{"error": "task not found"})
+func (r *Router) getServer(w http.ResponseWriter, req *http.Request, id int64) {
+	var s Server
+	err := r.db.QueryRow(req.Context(), `SELECT id,name,hostname,ip_address::text,environment,provider,created_at::text,updated_at::text FROM servers WHERE id=$1`, id).Scan(&s.ID, &s.Name, &s.Hostname, &s.IPAddress, &s.Environment, &s.Provider, &s.CreatedAt, &s.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, 404, "server not found")
 		return
 	}
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeError(w, 500, "database error")
 		return
 	}
-	writeJSON(w, 200, t)
+	writeJSON(w, 200, s)
 }
-func (a *API) create(w http.ResponseWriter, r *http.Request) {
-	in, err := decode(r)
-	if err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
+func (r *Router) createServer(w http.ResponseWriter, req *http.Request) {
+	var in Server
+	if err := json.NewDecoder(req.Body).Decode(&in); err != nil {
+		writeError(w, 400, "invalid JSON")
 		return
 	}
-	var t Task
-	err = a.db.QueryRow(r.Context(), `INSERT INTO tasks(title,description,status) VALUES($1,$2,$3) RETURNING id,title,description,status,created_at,updated_at`, in.Title, in.Description, in.Status).Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.CreatedAt, &t.UpdatedAt)
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+	if err := validate(in); err != nil {
+		writeError(w, 400, err.Error())
 		return
 	}
-	writeJSON(w, 201, t)
+	var s Server
+	err := r.db.QueryRow(req.Context(), `INSERT INTO servers(name,hostname,ip_address,environment,provider) VALUES($1,$2,$3,$4,$5) RETURNING id,name,hostname,ip_address::text,environment,provider,created_at::text,updated_at::text`, in.Name, in.Hostname, in.IPAddress, in.Environment, in.Provider).Scan(&s.ID, &s.Name, &s.Hostname, &s.IPAddress, &s.Environment, &s.Provider, &s.CreatedAt, &s.UpdatedAt)
+	if err != nil {
+		writeError(w, 500, "failed to create server")
+		return
+	}
+	writeJSON(w, 201, s)
 }
-func (a *API) update(w http.ResponseWriter, r *http.Request, id int64) {
-	in, err := decode(r)
+func (r *Router) updateServer(w http.ResponseWriter, req *http.Request, id int64) {
+	var in Server
+	if err := json.NewDecoder(req.Body).Decode(&in); err != nil {
+		writeError(w, 400, "invalid JSON")
+		return
+	}
+	if err := validate(in); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	var s Server
+	err := r.db.QueryRow(req.Context(), `UPDATE servers SET name=$1,hostname=$2,ip_address=$3,environment=$4,provider=$5,updated_at=NOW() WHERE id=$6 RETURNING id,name,hostname,ip_address::text,environment,provider,created_at::text,updated_at::text`, in.Name, in.Hostname, in.IPAddress, in.Environment, in.Provider, id).Scan(&s.ID, &s.Name, &s.Hostname, &s.IPAddress, &s.Environment, &s.Provider, &s.CreatedAt, &s.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, 404, "server not found")
+		return
+	}
 	if err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		writeError(w, 500, "failed to update server")
 		return
 	}
-	var t Task
-	err = a.db.QueryRow(r.Context(), `UPDATE tasks SET title=$1,description=$2,status=$3,updated_at=now() WHERE id=$4 RETURNING id,title,description,status,created_at,updated_at`, in.Title, in.Description, in.Status, id).Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.CreatedAt, &t.UpdatedAt)
-	if err == pgx.ErrNoRows {
-		writeJSON(w, 404, map[string]string{"error": "task not found"})
-		return
-	}
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, 200, t)
+	writeJSON(w, 200, s)
 }
-func (a *API) delete(w http.ResponseWriter, r *http.Request, id int64) {
-	tag, err := a.db.Exec(r.Context(), `DELETE FROM tasks WHERE id=$1`, id)
+func (r *Router) deleteServer(w http.ResponseWriter, req *http.Request, id int64) {
+	res, err := r.db.Exec(req.Context(), `DELETE FROM servers WHERE id=$1`, id)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeError(w, 500, "failed to delete server")
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		writeJSON(w, 404, map[string]string{"error": "task not found"})
+	if res.RowsAffected() == 0 {
+		writeError(w, 404, "server not found")
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(204)
+}
+func validate(s Server) error {
+	for n, v := range map[string]string{"name": s.Name, "hostname": s.Hostname, "ip_address": s.IPAddress, "environment": s.Environment, "provider": s.Provider} {
+		if strings.TrimSpace(v) == "" {
+			return errors.New(n + " is required")
+		}
+	}
+	return nil
+}
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }
