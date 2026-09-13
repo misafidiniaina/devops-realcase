@@ -8,6 +8,9 @@ echo "$R"
 ID=$(printf '%s' "$R" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
 test -n "$ID"
 curl --fail --silent "$BASE_URL/api/v1/servers/$ID"; echo
+UPDATED=$(curl --fail --silent -X PUT "$BASE_URL/api/v1/servers/$ID" -H 'Content-Type: application/json' -d '{"name":"updated-smoke-server","hostname":"updated.example.internal","ip_address":"10.20.30.41","environment":"staging","provider":"gcp"}')
+echo "$UPDATED"
+curl --fail --silent "$BASE_URL/api/v1/servers/$ID"; echo
 CODE=$(curl --silent -o /dev/null -w '%{http_code}' -X DELETE "$BASE_URL/api/v1/servers/$ID")
 test "$CODE" = 204
 echo "Smoke test passed."
