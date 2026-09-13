@@ -1,0 +1,6 @@
+aws_region  = "eu-west-1"
+environment = "dev"
+
+# Keep real credentials out of Git. Use a secret manager, environment variable,
+# or a local terraform.tfvars file excluded by .gitignore.
+db_password = "replace-with-a-secret"
